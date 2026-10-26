@@ -1,0 +1,66 @@
+name: opencode2api
+
+# Single-port, read-only deployment of the OpenCode API gateway.
+#
+# The container serves both the /v1/* + /healthz API and the /api/* + WebUI
+# management surface on one :80 listener (UNIFIED=1, the default), which is
+# the layout a single-port host such as blitz.cloud expects. API calls and
+# WebUI sign-in both arrive on the same hostname; only the path differs.
+#
+# /var/lib/opencode2api holds config.json and the model-cache sidecar files;
+# the rest of the filesystem is read-only. The host's config.json is copied
+# in as the initial seed and is not bind-mounted. To import host changes
+# later: docker compose cp config.json opencode2api:/var/lib/opencode2api/config.json
+# and docker compose restart (or change the WebUI password through the UI and
+# use the "apply/reload" behaviour described in the docs).
+services:
+  opencode2api:
+    image: ${OPENCODE2API_VERSION:-ghcr.io/jasonxu114514/opencode2api:latest}
+    configs:
+      - source: opencode2api-config
+        target: /run/config/opencode2api.json
+        readonly: true
+    volumes:
+      - type: volume
+        source: opencode2api-state
+        target: /var/lib/opencode2api
+      - type: tmpfs
+        target: /tmp
+    environment:
+      CONFIG_SEED_PATH: /run/config/opencode2api.json
+      STATE_DIR: /var/lib/opencode2api
+      # Default UNIFIED=1: a single :80 listener serves API + WebUI. Set
+      # UNIFIED=0 and also expose 8080/8081 if you need the legacy
+      # two-listener layout (API on :8080, WebUI on :8081).
+      UNIFIED: "1"
+      # Optional per-host overrides:
+      # LISTEN_ADDRESS: 0.0.0.0:80
+      # WEBUI_LISTEN_ADDRESS: 0.0.0.0:8081  # ignored when UNIFIED != 0
+      # OPENCODE2API_LISTEN: 0.0.0.0:80
+      # OPENCODE2API_WEBUI_LISTEN: 0.0.0.0:8081
+    ports:
+      - "${OPENCODE2API_PORT:-80}:80"
+      # Legacy two-listener mode (UNIFIED=0) also needs 8080/8081 published.
+      # Comment out the two lines below unless UNIFIED=0 is set.
+      # - "${OPENCODE2API_API_PORT:-8080}:8080"
+      # - "${OPENCODE2API_WEBUI_PORT:-8081}:8081"
+    security_opt:
+      - no-new-privileges:true
+    read_only: true
+    cap_drop: [ALL]
+    healthcheck:
+      # In unified mode the single listener is :80. When UNIFIED=0 switch the
+      # target to http://127.0.0.1:8080/healthz.
+      test: [CMD, wget, -q, -O, /dev/null, http://127.0.0.1:80/healthz]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 10s
+    restart: unless-stopped
+
+configs:
+  opencode2api-config:
+    file: ./config.json
+
+volumes:
+  opencode2api-state:
